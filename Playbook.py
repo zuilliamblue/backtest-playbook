@@ -113,9 +113,17 @@ def build_playbook_table(
     hora_fim=time(17, 45),
     alvos_config=None,
     pts_stop=350,
+    usar_trailing=False,
+    trailing_trigger=300, # NOVO PARAMETRO
+    trailing_dist=300,    # NOVO PARAMETRO
+    dias_semana_selecionados=None # NOVO PARAMETRO (Lista de ints 0-6)
 ):
     if alvos_config is None or len(alvos_config) == 0:
         alvos_config = [{"alvo": 1, "alvo_pts": 0, "qtd": 1}]
+    
+    # Se não vier filtro de dias, assume todos (0 a 6)
+    if dias_semana_selecionados is None:
+        dias_semana_selecionados = [0, 1, 2, 3, 4, 5, 6]
 
     df = df_geral.copy()
     ind = df_ind.copy()
@@ -145,6 +153,13 @@ def build_playbook_table(
         df = df[df["Data"] >= data_inicio]
     if data_fim is not None:
         df = df[df["Data"] <= data_fim]
+        
+    # --- NOVO: Filtro de Dias da Semana ---
+    # 0=Seg, 1=Ter, ..., 6=Dom
+    # Convertemos a coluna Data para datetime temporariamente para extrair o dayofweek
+    df["_dia_semana"] = pd.to_datetime(df["Data"]).dt.dayofweek
+    df = df[df["_dia_semana"].isin(dias_semana_selecionados)].copy()
+    df = df.drop(columns=["_dia_semana"]) # Limpa a coluna auxiliar
 
     # Filtro de hora fim
     df = df[df["Hora"] <= hora_fim].copy()
@@ -239,7 +254,7 @@ def build_playbook_table(
                 idx_val = df_after[cond_val].index.min()
                 box_val = (
                     int(df_after.loc[idx_val, "Box"])
-                    if pd.notna(idx_val) # <-- CORRIGIDO AQUI
+                    if pd.notna(idx_val)
                     else None
                 )
             else:
@@ -251,7 +266,7 @@ def build_playbook_table(
                 idx_vah = df_after[cond_vah].index.min()
                 box_vah = (
                     int(df_after.loc[idx_vah, "Box"])
-                    if pd.notna(idx_vah) # <-- CORRIGIDO AQUI
+                    if pd.notna(idx_vah)
                     else None
                 )
             else:
@@ -319,24 +334,37 @@ def build_playbook_table(
         stop_price = None
         valor_ponto = 0.2  # fixo por enquanto
 
-        # Stop único (para todos os alvos)
+        # Prepara os parâmetros para o Loop de Targets
+        # Se Trailing Stop estiver desligado, calculamos o Stop estático aqui (padrão antigo)
+        # Se estiver ligado, o stop é dinâmico dentro do loop
+        
+        # Lógica Antiga (Só usada se Trailing OFF ou para referência inicial)
         if entrada in ("Compra", "Venda") and entrada_price is not None:
             if entrada == "Compra":
                 if entrada_box == 1:
-                    stop_price = entrada_row["Abert"] - pts_stop
+                    stop_price_static = entrada_row["Abert"] - pts_stop
                 else:
-                    stop_price = entrada_row["Fec"] - pts_stop
-                cond_stop = df_after_entry["Fec"] <= stop_price
+                    stop_price_static = entrada_row["Fec"] - pts_stop
+                
+                # Só calcula o box do stop estático se não formos usar trailing
+                # (ou usamos como base)
+                if not usar_trailing:
+                    cond_stop = df_after_entry["Fec"] <= stop_price_static
+                    idx_stop = df_after_entry[cond_stop].index.min()
+                    if isinstance(idx_stop, (int, np.integer)):
+                        stop_box = int(df_after_entry.loc[idx_stop, "Box"])
+
             else:  # Venda
                 if entrada_box == 1:
-                    stop_price = entrada_row["Abert"] + pts_stop
+                    stop_price_static = entrada_row["Abert"] + pts_stop
                 else:
-                    stop_price = entrada_row["Fec"] + pts_stop
-                cond_stop = df_after_entry["Fec"] >= stop_price
-
-            idx_stop = df_after_entry[cond_stop].index.min()
-            if isinstance(idx_stop, (int, np.integer)):
-                stop_box = int(df_after_entry.loc[idx_stop, "Box"])
+                    stop_price_static = entrada_row["Fec"] + pts_stop
+                
+                if not usar_trailing:
+                    cond_stop = df_after_entry["Fec"] >= stop_price_static
+                    idx_stop = df_after_entry[cond_stop].index.min()
+                    if isinstance(idx_stop, (int, np.integer)):
+                        stop_box = int(df_after_entry.loc[idx_stop, "Box"])
 
         alvo_boxes = {}
         resultados = []
@@ -344,20 +372,27 @@ def build_playbook_table(
         for idx_alvo, cfg in enumerate(alvos_config, start=1):
             pts = cfg.get("alvo_pts", 0)
             qtd = cfg.get("qtd", 1)
-
+            
+            res = 0.0
+            alvo_box = None
+            
             if entrada not in ("Compra", "Venda") or entrada_price is None or pts <= 0:
-                alvo_box = None
-                res = 0.0
-            else:
+                alvo_boxes[idx_alvo] = None
+                resultados.append(0.0)
+                continue
+
+            # -----------------------------------------------
+            # CAMINHO 1: Lógica Original (Stop Fixo)
+            # -----------------------------------------------
+            if not usar_trailing:
+                # Target price calculation
                 if entrada == "Compra":
-                    # Compra: alvo acima do preço de entrada
                     if entrada_box == 1:
                         target_price = entrada_row["Abert"] + pts
                     else:
                         target_price = entrada_row["Fec"] + pts
                     cond_target = df_after_entry["Fec"] >= target_price
                 else:  # Venda
-                    # Venda: alvo abaixo do preço de entrada
                     if entrada_box == 1:
                         target_price = entrada_row["Abert"] - pts
                     else:
@@ -372,13 +407,128 @@ def build_playbook_table(
 
                 # Quem veio primeiro: alvo ou stop
                 if alvo_box is None and stop_box is None:
-                    res = 0.0
+                    # Zera no Fechamento
+                    last_row = df_day.iloc[-1]
+                    close_price = float(last_row["Fec"])
+                    diff_pts = 0.0
+                    if entrada == "Compra":
+                        diff_pts = close_price - entrada_price
+                    elif entrada == "Venda":
+                        diff_pts = entrada_price - close_price
+                    res = diff_pts * valor_ponto * qtd
+                    
                 elif alvo_box is not None and (stop_box is None or alvo_box < stop_box):
                     # Alvo ganhou
                     res = pts * valor_ponto * qtd
                 else:
                     # Stop ganhou
                     res = -pts_stop * valor_ponto * qtd
+            
+            # -----------------------------------------------
+            # CAMINHO 2: Lógica Nova (Trailing Stop)
+            # -----------------------------------------------
+            else:
+                # Simulação Candle a Candle
+                
+                # Define Preço de Alvo
+                target_price = 0.0
+                if entrada == "Compra":
+                     # Baseia no entry price (ajuste conforme sua regra de entry_box 1 ou fechamento)
+                     # Usaremos entrada_price que já foi calculado corretamente lá em cima
+                     target_price = entrada_price + pts
+                else:
+                     target_price = entrada_price - pts
+                
+                # Estado inicial do Trailing
+                current_stop_val = stop_price_static # Começa no stop fixo (-350)
+                # trailing_trigger = 300 (agora vem como parametro)
+                # trailing_step = 300 (agora vem como parametro 'dist')
+                
+                trade_closed = False
+                
+                for i, row in df_after_entry.iterrows():
+                    curr_high = float(row["Máxima"])
+                    curr_low = float(row["Mínima"])
+                    curr_box = int(row["Box"])
+                    
+                    # 1. Checa se pegou no Stop Atual (Prioridade de defesa)
+                    hit_stop = False
+                    exit_price_sim = 0.0
+                    
+                    if entrada == "Compra":
+                        if curr_low <= current_stop_val:
+                            hit_stop = True
+                            exit_price_sim = current_stop_val # Assume fill no stop
+                    else: # Venda
+                        if curr_high >= current_stop_val:
+                            hit_stop = True
+                            exit_price_sim = current_stop_val
+                    
+                    if hit_stop:
+                        trade_closed = True
+                        stop_box = curr_box # Atualiza o stop_box para mostrar onde saiu
+                        
+                        # Calcula Resultado Real (pode ser lucro se o trailing subiu)
+                        if entrada == "Compra":
+                            diff_pts = exit_price_sim - entrada_price
+                        else:
+                            diff_pts = entrada_price - exit_price_sim
+                        
+                        res = diff_pts * valor_ponto * qtd
+                        break
+
+                    # 2. Checa se pegou no Alvo
+                    hit_target = False
+                    if entrada == "Compra":
+                        if curr_high >= target_price:
+                            hit_target = True
+                            exit_price_sim = target_price
+                    else: # Venda
+                        if curr_low <= target_price:
+                            hit_target = True
+                            exit_price_sim = target_price
+                    
+                    if hit_target:
+                        trade_closed = True
+                        alvo_box = curr_box
+                        res = pts * valor_ponto * qtd # Gain cheio
+                        break
+                    
+                    # 3. Atualiza Trailing Stop
+                    # Regra: Se andar X pts a favor (trigger), stop fica a Y pts (dist) de distância do extremo
+                    if entrada == "Compra":
+                        # O quanto andou a favor (High - Entrada)
+                        favorable_dist = curr_high - entrada_price
+                        if favorable_dist >= trailing_trigger:
+                            # Novo stop potencial = High - Distancia
+                            new_stop = curr_high - trailing_dist
+                            # O stop só sobe, nunca desce
+                            if new_stop > current_stop_val:
+                                current_stop_val = new_stop
+                                
+                    else: # Venda
+                        # O quanto andou a favor (Entrada - Low)
+                        favorable_dist = entrada_price - curr_low
+                        if favorable_dist >= trailing_trigger:
+                            # Novo stop potencial = Low + Distancia
+                            new_stop = curr_low + trailing_dist
+                            # O stop só desce, nunca sobe
+                            if new_stop < current_stop_val:
+                                current_stop_val = new_stop
+
+                # Fim do Loop de Candles
+                
+                # Se terminou o dia e não fechou
+                if not trade_closed:
+                    last_row = df_day.iloc[-1]
+                    close_price = float(last_row["Fec"])
+                    diff_pts = 0.0
+                    if entrada == "Compra":
+                        diff_pts = close_price - entrada_price
+                    elif entrada == "Venda":
+                        diff_pts = entrada_price - close_price
+                    res = diff_pts * valor_ponto * qtd
+
 
             alvo_boxes[idx_alvo] = alvo_box
             resultados.append(res)
@@ -411,6 +561,8 @@ def build_playbook_table(
             linha[f"Alvo-{i}"] = alvo_boxes.get(i)
 
         # Coluna Stop (box do stop, se houver)
+        # Obs: No trailing stop, o stop_box varia por alvo se tiverem configs diferentes,
+        # mas aqui simplificamos mostrando o último calculado ou o primeiro
         linha["Stop"] = stop_box
 
         # Colunas Add (Add-1, Add-2, ...)
@@ -891,6 +1043,43 @@ def pagina_playbook():
         value=350,
     )
 
+    # OPÇÃO DE TRAILING STOP
+    st.sidebar.markdown("---")
+    usar_trailing = st.sidebar.checkbox("Ativar Trailing Stop", value=False)
+    
+    trailing_trigger = 300
+    trailing_dist = 300
+
+    if usar_trailing:
+        # Configurações avançadas do Trailing
+        col_tr1, col_tr2 = st.sidebar.columns(2)
+        with col_tr1:
+            trailing_trigger = st.number_input("Gatilho (pts)", min_value=0, step=50, value=300, help="Quanto o preço precisa andar a favor para ativar o trailing")
+        with col_tr2:
+            trailing_dist = st.number_input("Distância (pts)", min_value=0, step=50, value=300, help="Distância que o stop vai manter do preço")
+
+    # OPÇÃO DE FILTRO DE DIAS DA SEMANA
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Dias da Semana**")
+    
+    # Mapeamento de dias
+    dias_map = {0: "Seg", 1: "Ter", 2: "Qua", 3: "Qui", 4: "Sex"}
+    
+    # Cria checkboxes para cada dia (todos marcados por padrão)
+    dias_selecionados = []
+    col_dias = st.sidebar.columns(3) # Distribui em colunas para economizar espaço
+    
+    idx = 0
+    for dia_num, dia_nome in dias_map.items():
+        # Alterna colunas
+        with col_dias[idx % 3]:
+            if st.checkbox(dia_nome, value=True, key=f"dia_{dia_num}"):
+                dias_selecionados.append(dia_num)
+        idx += 1
+    
+    # Adiciona Sáb/Dom se existirem nos dados (opcional, mas bom garantir)
+    # dias_selecionados.extend([5, 6]) # Sáb e Dom sempre incluídos se houver, ou adicione checkboxes para eles também
+
     # Botão Gerar Estatística
     st.sidebar.markdown("---")
     gerar_estatistica = st.sidebar.button("Gerar Estatística")
@@ -941,6 +1130,10 @@ def pagina_playbook():
             hora_fim=hora_fim,
             alvos_config=alvos_config,
             pts_stop=int(pts_stop),
+            usar_trailing=usar_trailing,
+            trailing_trigger=int(trailing_trigger),
+            trailing_dist=int(trailing_dist),
+            dias_semana_selecionados=dias_selecionados
         )
 
         if tabela.empty:
@@ -978,6 +1171,19 @@ def pagina_playbook():
             st.session_state["mostrar_tabela_mensal"] = True # Começa visível
 
         # Define o texto do botão ANTES de desenhar
+        if st.session_state["mostrar_tabela_mensal"]:
+            texto_botao_mensal = "Ocultar Resultado Mensal"
+        else:
+            texto_botao_mensal = "Mostrar Resultado Mensal"
+
+        if st.button(texto_botao_mensal):
+            # Inverte o estado
+            st.session_state["mostrar_tabela_mensal"] = (
+                not st.session_state["mostrar_tabela_mensal"]
+            )
+            # Força o re-run imediato
+            st.rerun()
+
         if st.session_state["mostrar_tabela_mensal"]:
             
             # --- Cria colunas para as tabelas de resumo ---
