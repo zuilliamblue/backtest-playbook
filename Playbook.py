@@ -258,12 +258,16 @@ def build_playbook_table(
             alvo_boxes[idx_alvo] = alvo_box; resultados.append(res)
 
         resultado_total = float(sum(resultados))
+        
+        # --- Adicionando a coluna "Box-Ent" ---
         linha = {
             "Data": entrada_row["Data"], "Hora": entrada_row["Hora"], "Abert": entrada_row["Abert"],
             "Máxima": entrada_row["Máxima"], "Mínima": entrada_row["Mínima"], "Fech": entrada_row["Fec"],
             "Box": entrada_row["Box"], "Abert. Dia": abert_dia, "VAH": vah, "VAL": val,
             "Max Inj": max_inj, "Min Inj": min_inj, "Lado": entrada_row["Lado"],
-            "Cenário": cenario, "Entrada": entrada, "Stop": stop_box, "Resultado Total": resultado_total
+            "Cenário": cenario, "Entrada": entrada, 
+            "Box-Ent": entrada_box, # NOVA COLUNA AQUI
+            "Stop": stop_box, "Resultado Total": resultado_total
         }
         for i in range(1, len(alvos_config) + 1):
             linha[f"Alvo-{i}"] = alvo_boxes.get(i)
@@ -275,7 +279,7 @@ def build_playbook_table(
     resultado_df = pd.DataFrame(linhas_saida)
     
     # Colunas e Ordem
-    cols_base = ["Data", "Hora", "Abert", "Máxima", "Mínima", "Fech", "Box", "Abert. Dia", "VAH", "VAL", "Max Inj", "Min Inj", "Lado", "Cenário", "Entrada"]
+    cols_base = ["Data", "Hora", "Abert", "Máxima", "Mínima", "Fech", "Box", "Abert. Dia", "VAH", "VAL", "Max Inj", "Min Inj", "Lado", "Cenário", "Entrada", "Box-Ent"]
     cols_alvo = [f"Alvo-{i}" for i in range(1, len(alvos_config) + 1)]
     cols_add = [f"Add-{i}" for i in range(1, len(alvos_config) + 1)]
     cols_res = [f"Res-{i}" for i in range(1, len(alvos_config) + 1)]
@@ -284,7 +288,8 @@ def build_playbook_table(
     cols_existentes = [c for c in cols if c in resultado_df.columns]
     resultado_df = resultado_df[cols_existentes]
 
-    # Cálculo Dia-Dia
+
+    # --- CÁLCULO DO ACUMULADO MENSAL (Dia-Dia) ---
     if "Resultado Total" in resultado_df.columns:
         resultado_df["Data"] = pd.to_datetime(resultado_df["Data"])
         resultado_df = resultado_df.sort_values(by=["Data", "Hora"], ascending=True)
@@ -293,7 +298,6 @@ def build_playbook_table(
         resultado_df = resultado_df.drop(columns=["MesAno"])
         
         cols_finais = list(resultado_df.columns)
-        # Reordena para Dia-Dia ficar após Resultado Total
         if "Resultado Total" in cols_finais and "Dia-Dia" in cols_finais:
             cols_finais.remove("Dia-Dia")
             idx = cols_finais.index("Resultado Total")
@@ -308,7 +312,11 @@ def format_playbook_table_for_display(tabela: pd.DataFrame):
     df = df.reset_index(drop=True)
     
     price_cols = ["Abert", "Máxima", "Mínima", "Fech", "Abert. Dia", "VAH", "VAL", "Max Inj", "Min Inj"]
-    box_cols = [c for c in df.columns if c.startswith("Alvo-")] + (["Stop"] if "Stop" in df.columns else [])
+    
+    box_cols = [c for c in df.columns if c.startswith("Alvo-")]
+    if "Stop" in df.columns: box_cols.append("Stop")
+    if "Box-Ent" in df.columns: box_cols.append("Box-Ent")
+    
     res_cols = [c for c in df.columns if c.startswith("Res-")] + (["Resultado Total", "Dia-Dia"] if "Resultado Total" in df.columns else [])
     
     for col in price_cols: 
@@ -373,14 +381,47 @@ def pagina_playbook():
               <h4 style="margin: 0 0 0.5rem 0; color: #e9d5ff;">Cenário 5</h4>
               <p style="margin: 0; line-height: 1.5; font-size: 0.9rem;">Abertura <b>acima</b> da <b>Max Injusta</b>.<br>Entrada: <b>Compra a Mercado</b>.</p></div>""", unsafe_allow_html=True)
 
-    # CSS Global (para as outras tabelas e estrutura)
+    # CSS Global (Atualizado para Linha Única, Scroll e Cursor de Ajuda)
     st.markdown("""
         <style>
-        .tabela-container { width: 100%; border-collapse: collapse; }
-        .tabela-container th { text-align: center !important; padding: 8px 12px; background-color: #1a202c; color: #cbd5e1; border: 1px solid #2d3748; position: sticky; top: 0; z-index: 1; }
-        .tabela-container td { text-align: center !important; padding: 8px 12px; border: 1px solid #2d3748; color: #e5e7eb; white-space: nowrap; }
+        /* Container com scroll horizontal se necessario */
+        .tabela-container {
+            display: block;
+            width: 100%;
+            overflow-x: auto; /* Permite scroll se a tabela for muito larga */
+            margin-top: 10px;
+        }
+        /* Estilização da tabela em si */
+        .tabela-container table {
+            width: 100%;
+            border-collapse: collapse;
+            /* table-layout: fixed; REMOVIDO para permitir que colunas cresçam */
+        }
+        /* Estilização de Cabeçalhos e Células */
+        .tabela-container th, .tabela-container td {
+            text-align: center !important;
+            vertical-align: middle !important;
+            padding: 8px 6px;
+            border: 1px solid #2d3748;
+            color: #e5e7eb;
+            font-size: 0.85rem;
+            /* O SEGREDO: white-space: nowrap proíbe quebra de linha */
+            white-space: nowrap;
+        }
+        .tabela-container th {
+            background-color: #1a202c;
+            color: #cbd5e1;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            font-weight: 600;
+        }
+        /* Cores alternadas das linhas */
         .tabela-container tbody tr:nth-child(even) { background-color: #1f2937; }
         .tabela-container tbody tr:nth-child(odd) { background-color: #111827; }
+        
+        /* Hover nas linhas */
+        .tabela-container tbody tr:hover { background-color: #374151 !important; }
         </style>
         """, unsafe_allow_html=True)
 
@@ -465,9 +506,10 @@ def pagina_playbook():
             <head>
             <style>
                 body {{ font-family: sans-serif; margin: 0; padding: 0; background-color: #0e1117; color: #fafafa; }}
-                .tabela-container {{ width: 100%; border-collapse: collapse; }}
-                th {{ position: sticky; top: 0; z-index: 10; background-color: #1a202c; color: #cbd5e1; padding: 8px 12px; border: 1px solid #2d3748; text-align: center; }}
-                td {{ padding: 8px 12px; border: 1px solid #2d3748; color: #e5e7eb; text-align: center; white-space: nowrap; }}
+                .tabela-container {{ width: 100%; display: flex; justify-content: center; overflow-x: auto; }}
+                table {{ width: 100%; border-collapse: collapse; white-space: nowrap; }}
+                th {{ position: sticky; top: 0; z-index: 10; background-color: #1a202c; color: #cbd5e1; padding: 8px 5px; border: 1px solid #2d3748; text-align: center; font-size: 0.85rem; }}
+                td {{ padding: 8px 5px; border: 1px solid #2d3748; color: #e5e7eb; text-align: center; font-size: 0.85rem; }}
                 tr:nth-child(even) {{ background-color: #1f2937; }}
                 tr:nth-child(odd) {{ background-color: #111827; }}
                 
@@ -478,7 +520,9 @@ def pagina_playbook():
             </style>
             </head>
             <body>
-                {html_table}
+                <div class="tabela-container">
+                    {html_table}
+                </div>
                 <script>
                     // Adiciona evento de clique em cada linha
                     const rows = document.querySelectorAll('tbody tr');
@@ -494,6 +538,17 @@ def pagina_playbook():
             
             # Renderiza usando components.html (Isolado = Scripts funcionam!)
             components.html(html_completo, height=700, scrolling=True)
+            
+            # =========================================================
+            # BOTÃO DE EXPORTAÇÃO (NOVO)
+            # =========================================================
+            # Cria arquivo CSV com separador ';' e decimal ',' para abrir direto no Excel BR
+            st.download_button(
+                label="📥 Exportar para Excel (CSV)",
+                data=tabela.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig'),
+                file_name=f"playbook_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
             
         else:
             st.info("Tabela Playbook está oculta.")
@@ -528,22 +583,210 @@ def pagina_playbook():
                 st.markdown(f'<div class="tabela-container">{styler_m.to_html(escape=False)}</div>', unsafe_allow_html=True)
 
             with col_stats:
-                st.subheader("Resumo por Período")
-                tab_agg['DiaSemana'] = tab_agg['Data'].dt.dayofweek
-                dmap = {0: 'Seg', 1: 'Ter', 2: 'Qua', 3: 'Qui', 4: 'Sex'}
-                df_d = tab_agg[tab_agg['DiaSemana'].isin(dmap.keys())].copy()
-                if not df_d.empty:
-                    sd = df_d.groupby('DiaSemana')['Resultado Total'].sum().reindex(dmap.keys(), fill_value=0)
-                    sd.index = sd.index.map(dmap); df_d_final = pd.DataFrame(sd).T; df_d_final.index = ["Resultado"]
-                    sty_d = df_d_final.style.format(fmt_res).map(color_res).hide(axis="index")
-                    st.markdown(f'<div class="tabela-container">{sty_d.to_html(escape=False)}</div>', unsafe_allow_html=True)
+                st.subheader("Resumo Anual Consolidado")
                 
-                st.markdown("<br>", unsafe_allow_html=True)
+                # Garante que a coluna Data é datetime e cria coluna Ano
+                tab_agg['Data'] = pd.to_datetime(tab_agg['Data'])
                 tab_agg['Ano'] = tab_agg['Data'].dt.year
-                sa = tab_agg.groupby('Ano')['Resultado Total'].sum()
-                df_a = pd.DataFrame(sa); df_a.index.name = "Ano"
-                sty_a = df_a.style.format(fmt_res).map(color_res)
-                st.markdown(f'<div class="tabela-container">{sty_a.to_html(escape=False)}</div>', unsafe_allow_html=True)
+
+                # =========================================================
+                # CONFIGURAÇÃO DE TOOLTIPS (DICAS INTERATIVAS)
+                # =========================================================
+                
+                # Função auxiliar para criar o HTML da tooltip
+                def dica(texto, ajuda):
+                    ajuda = ajuda.replace('\n', ' ') # Garante que não quebra linha no atributo title
+                    # Cria um span com title (tooltip nativo) e estilo visual de ajuda
+                    return f'<span title="{ajuda}" style="cursor: help; text-decoration: underline; text-decoration-style: dotted; text-decoration-color: #9ca3af;">{texto}</span>'
+
+                # Textos das Dicas
+                txt_fator_lucro = "Soma dos Ganhos Brutos / Soma das Perdas Brutas.\nIndica quanto a estratégia gerou de lucro bruto para cada R$ 1 perdido."
+                txt_payoff = "Média de Ganho / Média de Perda.\nMostra a relação média de risco/retorno por dia/trade."
+                txt_fator_rec = "Lucro Total / Drawdown Máximo.\nMede a capacidade da estratégia de se recuperar da sua pior fase histórica. > 3.0 é excelente."
+                txt_dd = "Maior queda acumulada de capital (do topo ao fundo) ocorrida no período."
+                txt_vol = "Desvio Padrão dos resultados financeiros diários.\nMede a instabilidade/oscilação da curva de capital."
+
+                # Cria os Labels com Tooltips
+                col_fator_lucro_html = dica("Fator de Lucro", txt_fator_lucro)
+                lbl_payoff = dica("Payoff", txt_payoff)
+                lbl_fator_rec = dica("Fator Recuperação", txt_fator_rec)
+                lbl_dd = dica("Drawdown Máximo", txt_dd)
+                lbl_vol = dica("Volatilidade", txt_vol)
+
+                # ---------------------------------------------------------
+                # 1. FUNÇÃO AUXILIAR (STREAKS)
+                # ---------------------------------------------------------
+                def get_streak_data(df_group):
+                    df_group = df_group.sort_values('Data')
+                    
+                    # Sequência Vencedora
+                    is_win = df_group['Resultado Total'] > 0
+                    win_blocks = df_group[is_win].groupby((is_win != is_win.shift()).cumsum())
+                    if len(win_blocks) > 0:
+                        max_win_block = max(win_blocks, key=lambda x: len(x[1]))[1]
+                        max_win_qtd = len(max_win_block)
+                        max_win_date = max_win_block['Data'].iloc[0].strftime("%d/%m")
+                    else:
+                        max_win_qtd = 0; max_win_date = "-"
+
+                    # Sequência Perdedora
+                    is_loss = df_group['Resultado Total'] < 0
+                    loss_blocks = df_group[is_loss].groupby((is_loss != is_loss.shift()).cumsum())
+                    if len(loss_blocks) > 0:
+                        max_loss_block = max(loss_blocks, key=lambda x: len(x[1]))[1]
+                        max_loss_qtd = len(max_loss_block)
+                        max_loss_date = max_loss_block['Data'].iloc[0].strftime("%d/%m")
+                    else:
+                        max_loss_qtd = 0; max_loss_date = "-"
+                        
+                    return pd.Series([max_win_qtd, max_win_date, max_loss_qtd, max_loss_date], 
+                                     index=['Seq. Gain', 'Início Gain', 'Seq. Loss', 'Início Loss'])
+
+                # ---------------------------------------------------------
+                # 2. CÁLCULOS POR ANO
+                # ---------------------------------------------------------
+                resumo_ano = tab_agg.groupby('Ano').agg(
+                    Resultado_Total=('Resultado Total', 'sum'),
+                    Total_Trades=('Resultado Total', 'count'),
+                    Ganhos_Brutos=('Resultado Total', lambda x: x[x > 0].sum()),
+                    Perdas_Brutas=('Resultado Total', lambda x: x[x < 0].sum()),
+                    Dias_Positivos=('Resultado Total', lambda x: (x > 0).sum()),
+                    Dias_Negativos=('Resultado Total', lambda x: (x < 0).sum()),
+                )
+                
+                resumo_streaks = tab_agg.groupby('Ano').apply(get_streak_data)
+                df_final = pd.concat([resumo_ano, resumo_streaks], axis=1)
+                
+                # Cálculos Year
+                df_final['Taxa Acerto (%)'] = (df_final['Dias_Positivos'] / df_final['Total_Trades']).fillna(0)
+                div_payoff = df_final['Perdas_Brutas'].abs().replace(0, 1)
+                # Aqui calculamos o "Fator de Lucro" (antigo Payoff Bruto)
+                df_final['Fator de Lucro'] = (df_final['Ganhos_Brutos'] / div_payoff).fillna(0)
+
+                # Prepara DF base
+                # Note que usamos a variavel col_fator_lucro_html para nomear a coluna
+                colunas_exibir = ['Resultado_Total', 'Taxa Acerto (%)', 'Fator de Lucro', 'Dias_Positivos', 'Dias_Negativos', 'Seq. Gain', 'Início Gain', 'Seq. Loss', 'Início Loss']
+                df_display = df_final[colunas_exibir].copy()
+                
+                # Renomeia colunas usando os HTMLs com Tooltip
+                df_display.columns = ['Resultado Total', 'Taxa Acerto', col_fator_lucro_html, 'Dias (+)', 'Dias (-)', 'Max Gain (dias)', 'Início (G)', 'Max Loss (dias)', 'Início (P)']
+
+                # ---------------------------------------------------------
+                # 3. CÁLCULOS TOTAIS E ESTATÍSTICAS EXTRAS
+                # ---------------------------------------------------------
+                
+                # --- Linha Total ---
+                total_res = tab_agg['Resultado Total'].sum()
+                total_pos = (tab_agg['Resultado Total'] > 0).sum()
+                total_neg = (tab_agg['Resultado Total'] < 0).sum()
+                total_count = tab_agg['Resultado Total'].count()
+                total_gross_gain = tab_agg[tab_agg['Resultado Total'] > 0]['Resultado Total'].sum()
+                total_gross_loss = tab_agg[tab_agg['Resultado Total'] < 0]['Resultado Total'].sum()
+                
+                total_taxa = total_pos / total_count if total_count > 0 else 0
+                total_fator_lucro = total_gross_gain / abs(total_gross_loss) if total_gross_loss != 0 else 0
+
+                # --- Métricas Extras ---
+                media_gain_dia = tab_agg[tab_agg['Resultado Total'] > 0]['Resultado Total'].mean()
+                media_loss_dia = tab_agg[tab_agg['Resultado Total'] < 0]['Resultado Total'].mean()
+                media_dia = tab_agg['Resultado Total'].mean()
+                
+                # Média Mensal
+                tab_agg['MesAno'] = tab_agg['Data'].dt.to_period('M')
+                media_mensal = tab_agg.groupby('MesAno')['Resultado Total'].sum().mean()
+                
+                # Volatilidade (Desvio Padrão Diário)
+                volatilidade = tab_agg['Resultado Total'].std()
+                
+                # Lógica de Status da Volatilidade
+                status_vol = "-"
+                if media_gain_dia > 0:
+                    ratio_vol = volatilidade / media_gain_dia
+                    if ratio_vol <= 1.0:
+                        status_vol = "Controlada"
+                    elif ratio_vol <= 2.0:
+                        status_vol = "Moderada"
+                    else:
+                        status_vol = "Alta"
+                else:
+                    status_vol = "N/A"
+                
+                # Drawdown Máximo
+                df_sorted = tab_agg.sort_values('Data')
+                cumsum = df_sorted['Resultado Total'].cumsum()
+                peak = cumsum.cummax()
+                drawdown = cumsum - peak
+                max_drawdown = drawdown.min()
+                
+                # Fator de Recuperação
+                fator_recuperacao = (total_res / abs(max_drawdown)) if max_drawdown != 0 else 0
+                
+                # Payoff Real (Médio)
+                payoff_real = (abs(media_gain_dia) / abs(media_loss_dia)) if media_loss_dia != 0 else 0
+
+
+                # Cria DataFrame com as linhas adicionais
+                # Nota: Usamos col_fator_lucro_html como chave para alinhar os dados na coluna certa
+                # Usamos os labels HTML (lbl_payoff, etc) como nome da linha (Idx)
+                extras = [
+                    {'Idx': 'Total', 'Resultado Total': total_res, 'Taxa Acerto': total_taxa, col_fator_lucro_html: total_fator_lucro, 'Dias (+)': total_pos, 'Dias (-)': total_neg},
+                    {'Idx': 'Média Gain/Dia', 'Resultado Total': media_gain_dia},
+                    {'Idx': 'Média Loss/Dia', 'Resultado Total': media_loss_dia},
+                    {'Idx': lbl_payoff, 'Resultado Total': "", col_fator_lucro_html: payoff_real}, # Linha Payoff Real
+                    {'Idx': 'Média/Dia', 'Resultado Total': media_dia},
+                    {'Idx': 'Média Mensal', 'Resultado Total': media_mensal},
+                    {'Idx': lbl_vol, 'Resultado Total': volatilidade, 'Taxa Acerto': status_vol}, # Linha Volatilidade
+                    {'Idx': lbl_dd, 'Resultado Total': max_drawdown}, # Linha Drawdown
+                    {'Idx': lbl_fator_rec, 'Resultado Total': "", col_fator_lucro_html: fator_recuperacao} # Linha Fator Rec
+                ]
+                
+                df_extras = pd.DataFrame(extras).set_index('Idx')
+                
+                # Alinha colunas (o que não existir vira NaN)
+                df_extras = df_extras.reindex(columns=df_display.columns)
+                
+                # Junta tudo
+                df_display = pd.concat([df_display, df_extras])
+                
+                # ---------------------------------------------------------
+                # 4. FORMATAÇÃO E ESTILO
+                # ---------------------------------------------------------
+                
+                # Função aprimorada para aceitar TEXTO também
+                def fmt_percent(v):
+                    if isinstance(v, str): return v 
+                    return f"{v*100:.2f}%".replace('.', ',') if pd.notnull(v) and v != "" else ""
+                
+                def fmt_decimal(v):
+                    if isinstance(v, str): return v
+                    return f"{v:.2f}".replace('.', ',') if pd.notnull(v) and v != "" else ""
+                
+                def fmt_inteiro(v):
+                    return f"{int(v)}" if pd.notnull(v) and v != "" else ""
+
+                # Aplica estilos
+                styler_final = df_display.fillna("").style\
+                    .format({
+                        'Resultado Total': fmt_res,
+                        'Taxa Acerto': fmt_percent, 
+                        col_fator_lucro_html: fmt_decimal, # Usar a chave HTML aqui também
+                        'Dias (+)': fmt_inteiro,
+                        'Dias (-)': fmt_inteiro,
+                        'Max Gain (dias)': fmt_inteiro,
+                        'Max Loss (dias)': fmt_inteiro
+                    })\
+                    .map(color_res, subset=['Resultado Total'])\
+                    .map(lambda v: "color: #22c55e; font-weight: bold;" if isinstance(v, (int, float)) and v > 0 else "", subset=['Dias (+)'])\
+                    .map(lambda v: "color: #ef4444; font-weight: bold;" if isinstance(v, (int, float)) and v > 0 else "", subset=['Dias (-)'])\
+                    .map(lambda v: "color: #22c55e; font-weight: bold;" if v == "Controlada" else 
+                                   "color: #facc15; font-weight: bold;" if v == "Moderada" else 
+                                   "color: #ef4444; font-weight: bold;" if v == "Alta" else "", subset=['Taxa Acerto'])
+
+                # Destaca a linha de Total com um fundo diferente (opcional, via CSS do Pandas)
+                styler_final = styler_final.apply(lambda x: ['background-color: #374151' if x.name == 'Total' else '' for i in x], axis=1)
+
+                st.markdown(f'<div class="tabela-container">{styler_final.to_html(escape=False)}</div>', unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
         else:
             st.info("Resultado Mensal está oculto.")
     else:
